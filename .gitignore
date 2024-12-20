@@ -1,5 +1,5 @@
 /ad_list
-/cache
-/config
+/cache/*
+/config/*
 /error_list
 /openvpn
