@@ -72,13 +72,21 @@ class WaybackCachingProxy:
         self.default_cache_length = 30 # 1 month~ in days
 
         self.error_list = []
-        with open("error_list", "r") as f:
-            self.error_list = f.read().split("\n")
-            self.error_list = [error for error in self.error_list if error != ""]
+        if os.path.exists("error_list"):
+            with open("error_list", "r") as f:
+                self.error_list = f.read().split("\n")
+                self.error_list = [error for error in self.error_list if error != ""]
+        else:
+            with open("error_list", "w") as f:
+                f.write("")
         self.ad_list = []
-        with open("ad_list", "r") as f:
-            self.ad_list = f.read().split("\n")
-            self.ad_list = [ad for ad in self.ad_list if ad != ""]
+        if os.path.exists("ad_list"):
+            with open("ad_list", "r") as f:
+                self.ad_list = f.read().split("\n")
+                self.ad_list = [ad for ad in self.ad_list if ad != ""]
+        else:
+            with open("ad_list", "w") as f:
+                f.write("")
         
         print("Wayback Caching Proxy Time:",datetime.datetime.fromtimestamp(self.timestamp))
 
@@ -318,6 +326,11 @@ app = FastAPI()
 
 templates = Jinja2Templates(directory="./templates")
 
+if not os.path.exists("timestamp"):
+    with open("timestamp", "w") as f:
+        f.write("20121010")
+        print("Created timestamp file with default timestamp.")
+        
 with open("timestamp") as f:
     timestamp = int(f.read())
     print("Loaded timestamp from file:",timestamp)
