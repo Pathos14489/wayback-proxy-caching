@@ -165,34 +165,64 @@ class WaybackCachingProxy:
         return raw_html, 200
 
     async def get_file(self, internet_file_path, url):
+        response_code = 200
         if url.startswith("https://web.archive.org/web/"):
             url = url.replace("https://web.archive.org/web/","")
         if url in self.error_list:
+            print("File in error list:", url)
             return "Error: This file could not be loaded. It may have been removed from the Wayback Machine or is not available at this time.", 404
         if not os.path.exists(internet_file_path):
+            print("Caching file from Wayback:", url)
             async with self.wayback_lock:
                 request_url = f"https://web.archive.org/web/{self.wayback_timestamp}id_/{url}"
                 print("Caching file:", request_url)
-                req = None 
-                while req is None:
+                try:
+                    req = None 
+                    while req is None:
+                        try:
+                            # req = requests.get(request_url, headers=self.user_agent)
+                            req = self.session.get(request_url, headers=self.user_agent)
+                        except Exception as e:
+                            print("Error:",e)
+                            req = None
+                            time.sleep(self.post_request_delay)
+                        time.sleep(self.post_request_delay)
+                    if req.status_code == 200:
+                        raw_file = req.content
+                        with open(internet_file_path, "wb") as f:
+                            f.write(raw_file)
+                    else:
+                        response_code = req.status_code
+                except Exception as e:
+                    print("Error:",e)
+                    return "Error: This file could not be loaded. It may have been removed from the Wayback Machine or is not available at this time.", 404
+                if not os.path.exists(internet_file_path):
+                    # try to get the file from the real server if it's not in the Wayback Machine
+                    print("Caching file from real server:", url)
+                    if url.startswith("http://"):
+                        url = url.replace("http://","https://")
                     try:
-                        # req = requests.get(request_url, headers=self.user_agent)
-                        req = self.session.get(request_url, headers=self.user_agent)
+                        req = None
+                        req = requests.get(url, headers=self.user_agent)
+                        time.sleep(self.post_request_delay)
+                        if req.status_code == 200:
+                            raw_file = req.content
+                            with open(internet_file_path, "wb") as f:
+                                f.write(raw_file)
+                        else:
+                            if response_code != 200:
+                                response_code = req.status_code
                     except Exception as e:
                         print("Error:",e)
-                        req = None
-                        time.sleep(self.post_request_delay)
-                    time.sleep(self.post_request_delay)
-                if req.status_code != 200:
-                    self.add_to_error_list(url)
-                    return "Error: This file could not be loaded. It may have been removed from the Wayback Machine or is not available at this time.", 404
-                raw_file = req.content
-                with open(internet_file_path, "wb") as f:
-                    f.write(raw_file)
+                        return "Error: This file could not be loaded. It may have been removed from the Wayback Machine or is not available at this time.", 404
         else:
+            print("Reading file from file:", internet_file_path)
             with open(internet_file_path, "rb") as f:
                 raw_file = f.read()
-        return raw_file, 200
+        if response_code != 200:
+            self.add_to_error_list(url)
+            return "Error: This file could not be loaded. It may have been removed from the Wayback Machine or is not available at this time.", 404
+        return raw_file, response_code
 
     def get_url_info(self, url, parameters, request_accepts, req_year, req_month, req_day): # Convert URL to Path info - Example: https://www.google.com/ -> ./internet/com/google/index.html, ./internet/com/google/, index.html, html - Example 2: https://www.google.com/search?q=hello -> ./internet/com/google/search/index.html, ./internet/com/google/search/, index.html, html
         print("URL:", url)
@@ -330,7 +360,7 @@ if not os.path.exists("timestamp"):
     with open("timestamp", "w") as f:
         f.write("20121010")
         print("Created timestamp file with default timestamp.")
-        
+
 with open("timestamp") as f:
     timestamp = int(f.read())
     print("Loaded timestamp from file:",timestamp)
@@ -371,6 +401,29 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # async def index(request: Request):
 #     return "Hello, World!"
 
+if not os.path.exists("external_ip"):
+    with open("external_ip", "w") as f:
+        f.write("")
+    external_ip = ""
+    print("Created external_ip file if you want to set it.")
+else:
+    print("Loading external IP address from file.")
+    with open("external_ip", "r") as f:
+        external_ip = f.read()
+external_ip = external_ip.strip()
+if external_ip == "":
+    print("External IP address not set. Please set the external IP address in the external_ip file if you want to use the proxy.pac file and access the server remotely.")
+
+if external_ip != "":
+    @app.get("/proxy.pac")
+    def generate_pac():
+        print("Generating PAC file...")
+        pac_file_content = """
+    function FindProxyForURL(url, host) {
+        return "PROXY  {external_ip}:8002"; 
+    }
+    """.format(external_ip=external_ip)
+        return Response(content=pac_file_content, media_type="application/x-ns-proxy-autoconfig")
 
 # Catch-all route for all other paths
 @app.get('/')
@@ -380,8 +433,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def catch_all(path: str, request: Request):
     path = str(request.url)
     host_address_string = f"http://{host_address}:8002/"
+    if external_ip != "":
+        remote_host_address_string = f"http://{external_ip}:8002/"
     if path.startswith(host_address_string):
         path = path[len(host_address_string):]
+    if path.startswith(remote_host_address_string):
+        path = path[len(remote_host_address_string):]
     if path.startswith("http:/"):
         path = path.replace("http:/","")
     if path.startswith("https:/"):
@@ -396,7 +453,7 @@ async def catch_all(path: str, request: Request):
     year = waycache_date.year
     month = waycache_date.month
     day = waycache_date.day
-    if path.strip() != "":
+    if path.strip() != "" and path != "http://" and path != "http://favicon.ico" and path != "http://favicon.ico/":
         invalid_path = False
         for ad in waycache.ad_list:
             if path.startswith(ad):
@@ -428,6 +485,8 @@ async def catch_all(path: str, request: Request):
         full_url = str(request.url)
         if full_url.startswith(host_address_string):
             full_url = full_url[len(host_address_string):]
+        if full_url.startswith(remote_host_address_string):
+            full_url = full_url[len(remote_host_address_string):]
         if full_url.startswith("http:/"):
             full_url = full_url.replace("http:/","")
         if full_url.startswith("https:/"):
@@ -467,6 +526,7 @@ async def catch_all(path: str, request: Request):
             else:
                 print("Getting Generic File")
                 content, response_code = await waycache.get_file(internet_file_path, full_url)
+                print(response_code)
                 return FileResponse(internet_file_path, status_code=response_code, headers={"Content-Type": request_accepts})
         except Exception as e:
             print("Error:",e)
